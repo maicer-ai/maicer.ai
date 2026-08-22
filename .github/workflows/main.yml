@@ -20,8 +20,8 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
-    - name: Build and Package App
-      run: npm run build
+    - name: Build Electron App
+      run: npx electron-builder --windows
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
