@@ -1,0 +1,49 @@
+{
+  "name": "voice-code-mvp",
+  "version": "0.1.0",
+  "description": "Local voice-to-code desktop assistant for Windows",
+  "main": "dist/main/main/main.js",
+  "author": "Voice Code",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1",
+    "dev:electron": "wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "build": "tsc -p tsconfig.json && vite build",
+    "start": "electron .",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "package:win": "npm run lint && npm run dist:win -- --publish never",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "electron-store": "^9.0.0",
+    "lucide": "^0.468.0"
+  },
+  "optionalDependencies": {
+    "robotjs": "^0.9.1"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
+    "@types/node": "^22.10.2",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.voicecode.assistant",
+    "productName": "Voice Code",
+    "asar": true,
+    "directories": { "output": "dist" },
+    "files": ["dist/**/*", "package.json"],
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "artifactName": "Voice-Code-Setup-${version}.${ext}" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true }
+  }
+}
