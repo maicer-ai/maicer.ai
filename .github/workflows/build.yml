@@ -16,17 +16,19 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 20
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Electron app (.exe)
-        run: npm run dist
+        run: npm run package:win
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: Voice-Code-Win
-          path: dist/*.exe
+          path: dist/Voice-Code-Setup-*.exe
+          if-no-files-found: error
 
