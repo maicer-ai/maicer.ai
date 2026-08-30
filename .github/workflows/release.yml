@@ -21,6 +21,10 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Initialize Visual Studio build environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
       - name: Run end-to-end user journey
         run: npm run test:e2e:windows
       - name: Upload end-to-end test log
