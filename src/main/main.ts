@@ -1,10 +1,14 @@
-import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, nativeImage, safeStorage, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } from 'electron';
 import Store from 'electron-store';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs/promises';
 import { createHash } from 'crypto';
 import AdmZip from 'adm-zip';
+import { activeWindowSync } from 'active-win';
+import { autoUpdater } from 'electron-updater';
+import { APP_SHORTCUT, APP_SHORTCUT_LABEL } from '../shared/config';
+import { FREE_MONTHLY_LIMIT, isWithinFreeQuota } from '../shared/quota';
 
 const API_URL = process.env.VOICE_CODE_API_URL ?? 'https://api.voicecode.local';
 const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434';
@@ -17,14 +21,35 @@ const ASSET_MANIFEST_URL = process.env.VOICE_CODE_ASSET_MANIFEST_URL;
 const NETWORK_TIMEOUT_MS = 30_000;
 type AssetConfig = { whisperUrl?: string; whisperSha256?: string; qwenUrl?: string; qwenSha256?: string; ollamaInstallerUrl?: string; ollamaInstallerSha256?: string };
 type Session = { id: string; title: string; transcript: string; output: string; context: string; createdAt: number };
-const store = new Store<{ encryptedToken?: string; completionTimestamps?: number[]; sessions?: Session[] }>();
-const tokenStore = store as unknown as { store: { encryptedToken?: string; completionTimestamps?: number[]; sessions?: Session[] } };
+type DailyMetrics = { functions: number; lines: number; seconds: number };
+const store = new Store<{ encryptedToken?: string; completionTimestamps?: number[]; monthlyCompletions?: { month: string; count: number }; dailyMetrics?: { date: string; value: DailyMetrics }; sessions?: Session[] }>();
+const tokenStore = store as unknown as { store: { encryptedToken?: string; completionTimestamps?: number[]; monthlyCompletions?: { month: string; count: number }; dailyMetrics?: { date: string; value: DailyMetrics }; sessions?: Session[] } };
 const robot: { keyTap(key: string, modifiers?: string[]): void; typeString(text: string): void; setKeyboardDelay?(milliseconds: number): void } | undefined = (() => {
   try { return require('robotjs') as { keyTap(key: string, modifiers?: string[]): void; typeString(text: string): void; setKeyboardDelay?(milliseconds: number): void }; } catch { return undefined; }
 })();
 robot?.setKeyboardDelay?.(1);
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let isQuitting = false;
+let targetWindowId: number | undefined;
+const generationControllers = new Map<number, AbortController>();
+
+function configureAutoUpdater() {
+  if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('error', (error) => console.error('Voice Code update error:', error.message));
+  autoUpdater.on('update-downloaded', (info) => console.log(`Voice Code ${info.version} downloaded; it will install on quit.`));
+  void autoUpdater.checkForUpdates().catch((error: unknown) => console.error('Voice Code update check failed:', error instanceof Error ? error.message : error));
+}
+
+function dateKey() { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; }
+function currentMonth() { return dateKey().slice(0, 7); }
+function monthlyCompletions() { const value = tokenStore.store.monthlyCompletions; if (!value || value.month !== currentMonth()) { tokenStore.store = { ...tokenStore.store, monthlyCompletions: { month: currentMonth(), count: 0 } }; return 0; } return value.count; }
+function licenseTier() { const token = tokenStore.store.encryptedToken ? safeStorage.decryptString(Buffer.from(tokenStore.store.encryptedToken, 'base64')) : ''; return token.startsWith('corporate:') ? 'corporate' : token.startsWith('pro:') ? 'pro' : undefined; }
+function hasLicense() { return Boolean(licenseTier()); }
+function dailyMetrics() { return tokenStore.store.dailyMetrics?.date === dateKey() ? tokenStore.store.dailyMetrics.value : { functions: 0, lines: 0, seconds: 0 }; }
+function addDailyMetrics(output: string, seconds: number) { const current = dailyMetrics(); const functions = (output.match(/(?:async\s+function|function\s+|=>|\bdef\s+|\bclass\s+)/g) ?? []).length; const value = { functions: current.functions + functions, lines: current.lines + output.split('\n').length, seconds: current.seconds + seconds }; tokenStore.store = { ...tokenStore.store, dailyMetrics: { date: dateKey(), value } }; return value; }
 
 function createWindow() {
   window = new BrowserWindow({
@@ -43,6 +68,12 @@ function createWindow() {
   });
   window.setAlwaysOnTop(true, 'floating');
   window.setSkipTaskbar(true);
+  window.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      window?.hide();
+    }
+  });
   window.on('closed', () => { window = null; });
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) void window.loadURL(devUrl);
@@ -111,6 +142,24 @@ function typeStreamChunk(text: string) {
     if (line) robot.typeString(line);
     if (index < lines.length - 1) robot.keyTap('enter');
   });
+}
+
+async function typeGeneratedOutput(text: string) {
+  if (!robot) return { inserted: false, reason: 'native-input-unavailable' };
+  const previousClipboard = clipboard.readText();
+  try {
+    window?.hide();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (targetWindowId !== undefined && activeWindowSync()?.id !== targetWindowId) return { inserted: false, reason: 'target-window-changed' };
+    clipboard.writeText(text);
+    robot.keyTap('v', [process.platform === 'darwin' ? 'command' : 'control']);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    clipboard.writeText(previousClipboard);
+    return { inserted: true };
+  } catch {
+    clipboard.writeText(previousClipboard);
+    return { inserted: false, reason: 'native-input-failed' };
+  }
 }
 
 async function downloadFile(url: string, destination: string, expectedSha256: string | undefined, label: string, archiveEntry?: string) {
@@ -195,6 +244,7 @@ function toggleOverlay() {
   if (window.isVisible()) {
     window.webContents.send('hotkey:pressed');
   } else {
+    try { targetWindowId = activeWindowSync()?.id; } catch { targetWindowId = undefined; }
     window.setAlwaysOnTop(true, 'floating');
     window.showInactive();
     window.webContents.send('hotkey:pressed');
@@ -209,29 +259,36 @@ async function checkOllama() {
 }
 
 function localCompletionTimestamps() {
-  const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
-  const recent = (tokenStore.store.completionTimestamps ?? []).filter((timestamp) => timestamp > cutoff);
+  const month = currentMonth();
+  const recent = (tokenStore.store.completionTimestamps ?? []).filter((timestamp) => dateKeyFor(timestamp).startsWith(month));
   tokenStore.store = { ...tokenStore.store, completionTimestamps: recent };
   return recent;
 }
 
+function dateKeyFor(timestamp: number) { const date = new Date(timestamp); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
+
 async function checkLimit() {
+  const monthUsed = monthlyCompletions();
+  if (hasLicense()) return { allowed: true, used: monthUsed, limit: FREE_MONTHLY_LIMIT, tier: 'pro' as const };
+  if (monthUsed >= FREE_MONTHLY_LIMIT) return { allowed: false, used: monthUsed, limit: FREE_MONTHLY_LIMIT, tier: 'free' as const };
   const localUsed = localCompletionTimestamps().length;
   try {
     const response = await fetch(`${API_URL}/api/check-limit`, { headers: authHeaders(), signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`Quota check failed: ${response.status}`);
     const remote = await response.json() as { allowed: boolean; used: number; limit: number; tier: 'free' | 'pro' };
     const used = Math.max(remote.used, localUsed);
-    return { ...remote, used, allowed: remote.tier === 'pro' || (remote.allowed && used < 5000) };
+    return { ...remote, used, limit: remote.tier === 'pro' ? remote.limit : FREE_MONTHLY_LIMIT, allowed: remote.tier === 'pro' || (remote.allowed && isWithinFreeQuota(used)) };
   } catch (error) {
-    return { allowed: localUsed < 5000, used: localUsed, limit: 5000, tier: 'free' as const, warning: error instanceof Error ? error.message : 'Quota service unavailable' };
+    return { allowed: isWithinFreeQuota(monthUsed), used: monthUsed, limit: FREE_MONTHLY_LIMIT, tier: 'free' as const, warning: error instanceof Error ? error.message : 'Quota service unavailable' };
   }
 }
 
-function recordCompletion() {
+function recordCompletion(output = '', seconds = 0) {
   const recent = localCompletionTimestamps();
   tokenStore.store = { ...tokenStore.store, completionTimestamps: [...recent, Date.now()] };
-  return { used: recent.length + 1, limit: 5000 };
+  const next = monthlyCompletions() + 1;
+  tokenStore.store = { ...tokenStore.store, monthlyCompletions: { month: currentMonth(), count: next } };
+  return { used: next, limit: FREE_MONTHLY_LIMIT, metrics: addDailyMetrics(output, seconds) };
 }
 
 function listSessions() {
@@ -265,8 +322,11 @@ ipcMain.handle('sessions:list', listSessions);
 ipcMain.handle('sessions:save', (_event, session: Omit<Session, 'id' | 'createdAt'>) => saveSession(session));
 ipcMain.handle('billing:open-checkout', () => shell.openExternal(process.env.STRIPE_CHECKOUT_URL ?? 'https://checkout.stripe.com/').then(() => true));
 ipcMain.handle('clipboard:copy', (_event, text: string) => { clipboard.writeText(text); return true; });
+ipcMain.handle('pipeline:type-output', (_event, text: string) => typeGeneratedOutput(text));
+ipcMain.handle('pipeline:typing-status', () => ({ available: Boolean(robot), platform: process.platform }));
 ipcMain.handle('pipeline:check-limit', checkLimit);
-ipcMain.handle('pipeline:record-completion', recordCompletion);
+ipcMain.handle('pipeline:record-completion', (_event, output: string, seconds: number) => recordCompletion(output, seconds));
+ipcMain.handle('metrics:today', () => dailyMetrics());
 ipcMain.handle('pipeline:transcribe', async (_event, audio: ArrayBuffer) => {
   const executable = whisperPath();
   if (!executable) return { transcript: '', status: 'missing-whisper' };
@@ -281,11 +341,16 @@ ipcMain.handle('pipeline:transcribe', async (_event, audio: ArrayBuffer) => {
   });
 });
 
-ipcMain.handle('pipeline:generate', async (event, input: { transcript: string; context: string; outsideIde: boolean }) => {
-  const prompt = input.outsideIde
-    ? `Polish or complete this spoken request as natural text. Preserve intent and output only the result.\n\n${input.transcript}`
-    : `Convert this spoken request into production-ready code. Resolve mid-sentence corrections by honoring the final instruction. Output ONLY raw code, with no markdown fences or explanation.\n\nRequest: ${input.transcript}\nSelected context:\n${input.context}`;
-  const response = await fetch(`${OLLAMA_URL}/api/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(5 * 60 * 1000), body: JSON.stringify({ model: QWEN_MODEL_NAME, prompt, system: 'You are a precise local coding assistant. Never add commentary when code is requested.', stream: true }) });
+ipcMain.handle('pipeline:generate', async (event, input: { transcript: string; context: string; outsideIde: boolean; requestId?: number }) => {
+  if (!hasLicense() && !isWithinFreeQuota(monthlyCompletions())) {
+    const error = new Error('Monthly completion limit reached');
+    error.name = 'QUOTA_EXCEEDED';
+    throw error;
+  }
+  const controller = new AbortController();
+  if (input.requestId !== undefined) generationControllers.set(input.requestId, controller);
+  const prompt = `Convert this spoken request into production-ready code. Resolve mid-sentence corrections by honoring the final instruction. Output ONLY raw code, with no markdown fences or explanation.\n\nRequest: ${input.transcript}\nSelected context (optional):\n${input.context}`;
+  const response = await fetch(`${OLLAMA_URL}/api/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal, body: JSON.stringify({ model: QWEN_MODEL_NAME, prompt, system: 'You are a precise local coding assistant. Never add commentary when code is requested.', stream: true }) });
   if (!response.ok || !response.body) throw new Error('Ollama is not ready. Start Ollama and try again.');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -298,23 +363,37 @@ ipcMain.handle('pipeline:generate', async (event, input: { transcript: string; c
       try {
         const chunk = JSON.parse(line) as { response?: string };
         if (chunk.response) {
-          typeStreamChunk(chunk.response);
-          event.sender.send('pipeline:chunk', chunk.response);
+          event.sender.send('pipeline:chunk', { requestId: input.requestId, chunk: chunk.response });
         }
       } catch { /* ignore incomplete provider lines */ }
     }
     buffer = buffer.slice(buffer.lastIndexOf('\n') + 1);
   }
-  event.sender.send('pipeline:complete', { typed: Boolean(robot) });
+  if (buffer.trim()) {
+    try {
+      const chunk = JSON.parse(buffer) as { response?: string };
+      if (chunk.response) event.sender.send('pipeline:chunk', { requestId: input.requestId, chunk: chunk.response });
+    } catch { /* ignore an incomplete final provider line */ }
+  }
+  event.sender.send('pipeline:complete', { requestId: input.requestId, typed: false });
+  if (input.requestId !== undefined) generationControllers.delete(input.requestId);
   return true;
 });
+  ipcMain.handle('pipeline:cancel', (_event, requestId: number) => { generationControllers.get(requestId)?.abort(); generationControllers.delete(requestId); return true; });
 
 app.whenReady().then(() => {
-  if (!globalShortcut.register('CommandOrControl+Space', toggleOverlay)) console.error('Voice Code could not register Ctrl + Space');
+  configureAutoUpdater();
+  if (!globalShortcut.register(APP_SHORTCUT, toggleOverlay)) console.error(`Voice Code could not register ${APP_SHORTCUT_LABEL}`);
   createWindow();
   tray = new Tray(nativeImage.createEmpty());
   tray.setToolTip('Voice Code');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Show Voice Code', click: () => { window?.showInactive(); } },
+    { type: 'separator' },
+    { label: 'Quit Voice Code', click: () => { isQuitting = true; app.quit(); } }
+  ]));
   tray.on('click', toggleOverlay);
   void checkOllama().then((health) => window?.webContents.send('system:health', health));
 });
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('before-quit', () => { isQuitting = true; });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); tray?.destroy(); });
