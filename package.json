@@ -1,6 +1,6 @@
 {
   "name": "voice-code-mvp",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "description": "Local voice-to-code desktop assistant for Windows",
   "main": "dist/main/main/main.js",
   "author": "Voice Code",
@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json && vite build",
     "start": "electron .",
     "dist:win": "npm run build && electron-builder --win nsis",
-    "package:win": "npm run lint && npm run rebuild:native && npm run dist:win -- --publish never",
+    "package:win": "electron-builder --win",
     "rebuild:native": "electron-rebuild -f -w robotjs",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "npm run build && node --test tests/quota.test.mjs",
@@ -45,12 +45,40 @@
     "appId": "com.voicecode.assistant",
     "productName": "Voice Code",
     "copyright": "Copyright (c) 2026 Voice Code",
-    "publish": { "provider": "github", "owner": "srm-media", "repo": "Voice-Code-MVP", "releaseType": "release" },
+    "publish": {
+      "provider": "github",
+      "owner": "srm-media",
+      "repo": "Voice-Code-MVP",
+      "releaseType": "release"
+    },
     "asar": true,
-    "asarUnpack": ["node_modules/robotjs/**"],
-    "directories": { "output": "dist" },
-    "files": ["dist/**/*", "package.json"],
-    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "artifactName": "Voice-Code-Setup-${version}.${ext}" },
-    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true }
+    "asarUnpack": [
+      "node_modules/robotjs/**"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Voice-Code-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }
