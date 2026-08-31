@@ -1,45 +1,73 @@
-name: Release Windows installer
+name: Build Windows App
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
+
     steps:
-      - name: Check out repository
+      - name: Checkout code
         uses: actions/checkout@v4
-      - name: Set up Node.js
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+
       - name: Install dependencies
-        run: npm ci
-      - name: Initialize Visual Studio build environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-      - name: Run end-to-end user journey
-        run: npm run test:e2e:windows
-      - name: Upload end-to-end test log
-        if: always()
+        run: npm install
+
+      - name: Build Electron app (.exe)
+        run: npm run package:win
+
+      - name: Prepare release asset
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path dist -Filter 'Voice-Code-Setup-*.exe' | Select-Object -First 1
+          if (-not $installer) {
+              throw 'Windows installer was not found in dist.'
+          }
+          New-Item -ItemType Directory -Force -Path artifact-staging | Out-Null
+          Copy-Item $installer.FullName artifact-staging/Voice-Code-Win.exe
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-e2e-log
-          path: test-results/e2e-journey.log
-          if-no-files-found: ignore
-      - name: Set package version from tag
+          name: Voice-Code-Win
+          path: artifact-staging/Voice-Code-Win.exe
+          if-no-files-found: error
+
+      - name: Download artifact for release
+        uses: actions/download-artifact@v4
+        with:
+          name: Voice-Code-Win
+          path: release-assets
+
+      - name: Create GitHub Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Voice Code ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/Voice-Code-Win.exe
+
+      - name: Publish download link
         shell: bash
-        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
-      - name: Build and publish Windows installer
-        run: npm run dist:win -- --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          download_url="${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/Voice-Code-Win.exe"
+          {
+            echo "## Voice Code download"
+            echo
+            echo "[Download Voice-Code-Win.exe]($download_url)"
+            echo
+            echo "$download_url"
+          } >> "$GITHUB_STEP_SUMMARY"
