@@ -4,17 +4,14 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
-
+    permissions:
+      contents: write
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -22,52 +19,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: npm install
 
-      - name: Build Electron app (.exe)
+      - name: Build and Package
         run: npm run package:win
-
-      - name: Prepare release asset
-        shell: pwsh
-        run: |
-          $installer = Get-ChildItem -Path dist -Filter 'Voice-Code-Setup-*.exe' | Select-Object -First 1
-          if (-not $installer) {
-              throw 'Windows installer was not found in dist.'
-          }
-          New-Item -ItemType Directory -Force -Path artifact-staging | Out-Null
-          Copy-Item $installer.FullName artifact-staging/Voice-Code-Win.exe
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Voice-Code-Win
-          path: artifact-staging/Voice-Code-Win.exe
-          if-no-files-found: error
-
-      - name: Download artifact for release
-        uses: actions/download-artifact@v4
-        with:
-          name: Voice-Code-Win
-          path: release-assets
-
-      - name: Create GitHub Release
-        id: release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Voice Code ${{ github.ref_name }}
-          generate_release_notes: true
-          files: release-assets/Voice-Code-Win.exe
-
-      - name: Publish download link
-        shell: bash
-        run: |
-          download_url="${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/Voice-Code-Win.exe"
-          {
-            echo "## Voice Code download"
-            echo
-            echo "[Download Voice-Code-Win.exe]($download_url)"
-            echo
-            echo "$download_url"
-          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
