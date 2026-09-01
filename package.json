@@ -13,14 +13,13 @@
     "start": "electron .",
     "dist:win": "npm run build && electron-builder --win nsis",
     "package:win": "npm run build && electron-builder --win",
-    "rebuild:native": "electron-rebuild -f -w robotjs",
+    "postinstall": "electron-builder install-app-deps",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "npm run build && node --test tests/quota.test.mjs",
     "test:e2e:windows": "npm run build && node --test tests/e2e/journey.test.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
-    "active-win": "^9.0.0",
     "electron-store": "^9.0.0",
     "electron-updater": "^6.6.2",
     "lucide": "^0.468.0",

@@ -5,7 +5,6 @@ import path from 'path';
 import fs from 'fs/promises';
 import { createHash } from 'crypto';
 import AdmZip from 'adm-zip';
-import { activeWindowSync } from 'active-win';
 import { autoUpdater } from 'electron-updater';
 import { APP_SHORTCUT, APP_SHORTCUT_LABEL } from '../shared/config';
 import { FREE_MONTHLY_LIMIT, isWithinFreeQuota } from '../shared/quota';
@@ -31,7 +30,6 @@ robot?.setKeyboardDelay?.(1);
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
-let targetWindowId: number | undefined;
 const generationControllers = new Map<number, AbortController>();
 
 function configureAutoUpdater() {
@@ -150,7 +148,6 @@ async function typeGeneratedOutput(text: string) {
   try {
     window?.hide();
     await new Promise((resolve) => setTimeout(resolve, 100));
-    if (targetWindowId !== undefined && activeWindowSync()?.id !== targetWindowId) return { inserted: false, reason: 'target-window-changed' };
     clipboard.writeText(text);
     robot.keyTap('v', [process.platform === 'darwin' ? 'command' : 'control']);
     await new Promise((resolve) => setTimeout(resolve, 120));
@@ -244,7 +241,6 @@ function toggleOverlay() {
   if (window.isVisible()) {
     window.webContents.send('hotkey:pressed');
   } else {
-    try { targetWindowId = activeWindowSync()?.id; } catch { targetWindowId = undefined; }
     window.setAlwaysOnTop(true, 'floating');
     window.showInactive();
     window.webContents.send('hotkey:pressed');
