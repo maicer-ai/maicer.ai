@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
@@ -20,17 +25,32 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Initialize Visual Studio build environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Install dependencies
-        run: npm ci
+        run: npm install
+
+      - name: Security audit
+        run: npm audit --omit=dev
 
       - name: Build Windows EXE
         run: npm run dist:win
 
-      - name: Upload Windows installer
+      - name: Upload final .exe artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Voice-Code-Windows
-          path: |
-            dist/*.exe
-            dist/*.blockmap
+          name: Voice-Code-Windows-Installer
+          path: dist/Voice-Code-Setup-*.exe
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release for tagged build
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $exe = Get-ChildItem -Path dist -Filter "Voice-Code-Setup-*.exe" | Select-Object -First 1
+          gh release create "${{ github.ref_name }}" "$($exe.FullName)" --title "${{ github.ref_name }}" --generate-notes --verify-tag
