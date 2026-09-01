@@ -1,15 +1,17 @@
 name: Build Windows App
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,11 +20,41 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
-      - name: Install Dependencies
+      - name: Initialize Visual Studio build environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install dependencies
         run: npm install
 
-      - name: Build and Package
-        run: npm run package:win
+      - name: Security audit
+        run: npm audit --omit=dev
+
+      - name: Build Windows installer
+        run: npm run dist:win
+
+      - name: Upload final EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Voice-Code-Windows-Installer
+          path: dist/Voice-Code-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach EXE to GitHub Release
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $exe = Get-ChildItem -Path dist -Filter "Voice-Code-Setup-*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "No final Windows installer was produced." }
+          $tag = "${{ github.ref_name }}"
+          $exists = gh release view $tag --json name 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag "$($exe.FullName)" --clobber
+          } else {
+            gh release create $tag "$($exe.FullName)" --title $tag --generate-notes --verify-tag
+          }
