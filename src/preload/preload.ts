@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('voiceCode', {
   typingStatus: () => ipcRenderer.invoke('pipeline:typing-status'),
   cancelGeneration: (requestId: number) => ipcRenderer.invoke('pipeline:cancel', requestId),
   openCheckout: () => ipcRenderer.invoke('billing:open-checkout'),
+  joinWaitlist: (email: string) => ipcRenderer.invoke('waitlist:join', email),
   hasLicense: () => ipcRenderer.invoke('license:has-token'),
   setLicense: (token: string) => ipcRenderer.invoke('license:set', token),
   listSessions: () => ipcRenderer.invoke('sessions:list'),

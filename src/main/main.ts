@@ -307,6 +307,13 @@ function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${safeStorage.decryptString(Buffer.from(encrypted, 'base64'))}` };
 }
 
+function validateHttpsUrl(value: string, label: string): string {
+  if (!value || typeof value !== 'string') throw new Error(`${label} is not configured.`);
+  const url = new URL(value);
+  if (url.protocol !== 'https:') throw new Error(`${label} must use HTTPS.`);
+  return value;
+}
+
 ipcMain.handle('system:health', checkOllama);
 ipcMain.handle('setup:status', runtimeStatus);
 ipcMain.handle('setup:bootstrap', bootstrapRuntime);
@@ -314,13 +321,46 @@ ipcMain.handle('overlay:hide', () => { window?.hide(); return true; });
 ipcMain.handle('context:read-selection', () => ({ text: clipboard.readText(), source: 'clipboard' }));
 ipcMain.handle('license:set', (_event, token: string) => {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage is unavailable on this device');
+  if (!token || typeof token !== 'string' || token.length < 3 || token.length > 1000) throw new Error('Invalid license token format');
   tokenStore.store = { ...tokenStore.store, encryptedToken: safeStorage.encryptString(token).toString('base64') };
+  return true;
+});
+ipcMain.handle('waitlist:join', async (_event, email: string) => {
+  const normalized = String(email ?? '').trim().toLowerCase();
+  const safeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
+  if (!safeEmail) throw new Error('Enter a valid email address.');
+
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+  const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseKey) throw new Error('Waitlist signup is not configured yet.');
+
+  const url = `${validateHttpsUrl(supabaseUrl, 'Supabase URL').replace(/\/$/, '')}/rest/v1/waitlist`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseKey,
+      Authorization: `Bearer ${supabaseKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal'
+    },
+    body: JSON.stringify({ email: safeEmail })
+  });
+
+  if (!response.ok) {
+    const problem = response.status === 409 ? 'This email is already on the waitlist.' : 'Could not join the waitlist. Please try again.';
+    throw new Error(problem);
+  }
+
   return true;
 });
 ipcMain.handle('license:has-token', () => Boolean(tokenStore.store.encryptedToken));
 ipcMain.handle('sessions:list', listSessions);
 ipcMain.handle('sessions:save', (_event, session: Omit<Session, 'id' | 'createdAt'>) => saveSession(session));
-ipcMain.handle('billing:open-checkout', () => shell.openExternal(process.env.STRIPE_CHECKOUT_URL ?? 'https://checkout.stripe.com/').then(() => true));
+ipcMain.handle('billing:open-checkout', () => {
+  const checkoutUrl = process.env.STRIPE_CHECKOUT_URL ?? 'https://checkout.stripe.com/';
+  validateHttpsUrl(checkoutUrl, 'Checkout URL');
+  return shell.openExternal(checkoutUrl).then(() => true);
+});
 ipcMain.handle('clipboard:copy', (_event, text: string) => { clipboard.writeText(text); return true; });
 ipcMain.handle('pipeline:type-output', (_event, text: string) => typeGeneratedOutput(text));
 ipcMain.handle('pipeline:typing-status', () => ({ available: Boolean(robot), platform: process.platform }));

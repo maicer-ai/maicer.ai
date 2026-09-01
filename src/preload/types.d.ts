@@ -17,6 +17,7 @@ declare global {
       typingStatus(): Promise<{ available: boolean; platform: string }>;
       cancelGeneration(requestId: number): Promise<boolean>;
       openCheckout(): Promise<boolean>;
+      joinWaitlist(email: string): Promise<boolean>;
       hasLicense(): Promise<boolean>;
       setLicense(token: string): Promise<boolean>;
       listSessions(): Promise<Array<{ id: string; title: string; transcript: string; output: string; context: string; createdAt: number }>>;

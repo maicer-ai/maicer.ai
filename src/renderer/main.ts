@@ -332,11 +332,7 @@ $('#waitlist-form').addEventListener('submit', async (event) => {
   submit.textContent = 'Joining...';
   error.textContent = '';
   try {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-    if (!supabaseUrl || !supabaseKey) throw new Error('Waitlist signup is not configured yet.');
-    const response = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/waitlist`, { method: 'POST', headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify({ email }) });
-    if (!response.ok) throw new Error(response.status === 409 ? 'This email is already on the waitlist.' : 'Could not join the waitlist. Please try again.');
+    await window.voiceCode.joinWaitlist(email);
     $('#upgrade-title').textContent = 'You are on the list.';
     $('#upgrade-copy').textContent = 'Thanks. We will email you when Voice Code Premium is ready.';
     $('#waitlist-form').classList.add('hidden');
