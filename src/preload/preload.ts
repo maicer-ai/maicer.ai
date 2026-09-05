@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-contextBridge.exposeInMainWorld('voiceCode', {
+contextBridge.exposeInMainWorld('maicer', {
   health: () => ipcRenderer.invoke('system:health'),
   setupStatus: () => ipcRenderer.invoke('setup:status'),
   bootstrapRuntime: () => ipcRenderer.invoke('setup:bootstrap'),

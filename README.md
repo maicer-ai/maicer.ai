@@ -4,11 +4,6 @@ Local-first voice-to-code and productivity assistant for Windows, built with Ele
 
 ## Local prerequisites
 
-- Node.js 20+
-- Ollama running locally with `qwen2.5-coder` available
-- A pinned Windows Whisper-compatible executable hosted at the configured `WHISPER_DOWNLOAD_URL` (it must accept WebM/Opus bytes on stdin and print the transcript to stdout)
-- Windows accessibility permission for native paste simulation
-- Native build tools when developing locally (`robotjs` is rebuilt for Electron)
 
 ```powershell
 ollama pull qwen2.5-coder
@@ -32,6 +27,8 @@ The Windows packaging command runs `electron-rebuild` so the native typing modul
 
 ## Configuration
 
+Copy `.env.example` to `.env` for local configuration. The `.env` file is ignored by git; never commit it or place secret values in renderer code. Supabase uses only its publishable/anon key through the Electron main process. Do not use a Supabase service-role key in this application.
+
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `OLLAMA_URL` | Local Ollama endpoint | `http://127.0.0.1:11434` |
@@ -42,6 +39,8 @@ The Windows packaging command runs `electron-rebuild` so the native typing modul
 | `QWEN_MODEL_SHA256` | SHA-256 for the Qwen weights | unset |
 | `VOICE_CODE_API_URL` | Cloud quota endpoint | `https://api.voicecode.local` |
 | `STRIPE_CHECKOUT_URL` | Pro checkout URL opened externally | Stripe placeholder |
+| `SUPABASE_URL` | Supabase project URL for waitlist signup | unset |
+| `SUPABASE_ANON_KEY` | Supabase publishable/anon key for waitlist signup | unset |
 
 Without configuration, packaged builds use pinned public defaults: the whisper.cpp `v1.7.4` Windows x64 release bundle and the Qwen2.5-Coder 0.5B Instruct Q4_K_M GGUF on Hugging Face. The app validates HTTPS URLs, downloads missing assets into `%LOCALAPPDATA%/Voice Code/runtime`, verifies hashes when supplied, extracts the Whisper executable from its ZIP, and resumes the setup screen on the next launch if a dependency is not ready. For release pinning, set `VOICE_CODE_ASSET_MANIFEST_URL` to a JSON manifest with `whisperUrl`, `whisperSha256`, `qwenUrl`, `qwenSha256`, and optional Ollama installer fields.
 

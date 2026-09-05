@@ -1,6 +1,5 @@
 import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } from 'electron';
-import Store from 'electron-store';
-import { spawn } from 'child_process';
+import 'dotenv/config';
 import path from 'path';
 import fs from 'fs/promises';
 import { createHash } from 'crypto';
@@ -9,20 +8,44 @@ import { autoUpdater } from 'electron-updater';
 import { APP_SHORTCUT, APP_SHORTCUT_LABEL } from '../shared/config';
 import { FREE_MONTHLY_LIMIT, isWithinFreeQuota } from '../shared/quota';
 
-const API_URL = process.env.VOICE_CODE_API_URL ?? 'https://api.voicecode.local';
+type StoreData = { encryptedToken?: string; completionTimestamps?: number[]; monthlyCompletions?: { month: string; count: number }; dailyMetrics?: { date: string; value: DailyMetrics }; sessions?: Session[] };
+type StoreInstance = { store: StoreData };
+let storeInstance: StoreInstance | undefined;
+const loadEsm = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<{ default: new <T>() => StoreInstance }>;
+const tokenStore = {
+  get store(): StoreData { return storeInstance?.store ?? {}; },
+  set store(value: StoreData) {
+    if (!storeInstance) throw new Error('Secure local storage is not initialized');
+    storeInstance.store = value;
+  }
+};
+
+async function initializeStore() {
+  if (!storeInstance) {
+    const storeModule = await loadEsm('electron-store');
+    storeInstance = new storeModule.default<StoreData>();
+  }
+  return storeInstance;
+}
+
+const API_URL = process.env.MAICER_API_URL ?? process.env.VOICE_CODE_API_URL ?? 'https://api.maicer.local';
 const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434';
-const OLLAMA_INSTALLER_URL = process.env.OLLAMA_INSTALLER_URL ?? 'https://ollama.com/download/OllamaSetup.exe';
+const OLLAMA_INSTALLER_URL = process.env.OLLAMA_INSTALLER_URL ?? 'https://ollama.ai/download/OllamaSetup.exe';
 const PUBLIC_WHISPER_URL = 'https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.4/whisper-bin-x64.zip';
 const PUBLIC_QWEN_URL = 'https://huggingface.co/bartowski/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-0.5B-Instruct-Q4_K_M.gguf?download=true';
 const QWEN_MODEL_NAME = 'qwen2.5-coder:0.5b';
 const ASSET_ROOT = path.join(app.getPath('userData'), 'runtime');
-const ASSET_MANIFEST_URL = process.env.VOICE_CODE_ASSET_MANIFEST_URL;
+const ASSET_MANIFEST_URL = process.env.MAICER_ASSET_MANIFEST_URL ?? process.env.VOICE_CODE_ASSET_MANIFEST_URL;
 const NETWORK_TIMEOUT_MS = 30_000;
+const MAX_SETUP_ATTEMPTS = 5;
+const SETUP_ATTEMPT_TIMEOUT_MS = 120000;
+
 type AssetConfig = { whisperUrl?: string; whisperSha256?: string; qwenUrl?: string; qwenSha256?: string; ollamaInstallerUrl?: string; ollamaInstallerSha256?: string };
 type Session = { id: string; title: string; transcript: string; output: string; context: string; createdAt: number };
 type DailyMetrics = { functions: number; lines: number; seconds: number };
-const store = new Store<{ encryptedToken?: string; completionTimestamps?: number[]; monthlyCompletions?: { month: string; count: number }; dailyMetrics?: { date: string; value: DailyMetrics }; sessions?: Session[] }>();
-const tokenStore = store as unknown as { store: { encryptedToken?: string; completionTimestamps?: number[]; monthlyCompletions?: { month: string; count: number }; dailyMetrics?: { date: string; value: DailyMetrics }; sessions?: Session[] } };
+
+let setupAttempts = 0;
+let setupLastAttemptTime = 0;
 const robot: { keyTap(key: string, modifiers?: string[]): void; typeString(text: string): void; setKeyboardDelay?(milliseconds: number): void } | undefined = (() => {
   try { return require('robotjs') as { keyTap(key: string, modifiers?: string[]): void; typeString(text: string): void; setKeyboardDelay?(milliseconds: number): void }; } catch { return undefined; }
 })();
@@ -36,9 +59,9 @@ function configureAutoUpdater() {
   if (!app.isPackaged) return;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on('error', (error) => console.error('Voice Code update error:', error.message));
-  autoUpdater.on('update-downloaded', (info) => console.log(`Voice Code ${info.version} downloaded; it will install on quit.`));
-  void autoUpdater.checkForUpdates().catch((error: unknown) => console.error('Voice Code update check failed:', error instanceof Error ? error.message : error));
+  autoUpdater.on('error', (error) => console.error('maicer update error:', error.message));
+  autoUpdater.on('update-downloaded', (info) => console.log(`maicer ${info.version} downloaded; it will install on quit.`));
+  void autoUpdater.checkForUpdates().catch((error: unknown) => console.error('maicer update check failed:', error instanceof Error ? error.message : error));
 }
 
 function dateKey() { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; }
@@ -50,19 +73,26 @@ function dailyMetrics() { return tokenStore.store.dailyMetrics?.date === dateKey
 function addDailyMetrics(output: string, seconds: number) { const current = dailyMetrics(); const functions = (output.match(/(?:async\s+function|function\s+|=>|\bdef\s+|\bclass\s+)/g) ?? []).length; const value = { functions: current.functions + functions, lines: current.lines + output.split('\n').length, seconds: current.seconds + seconds }; tokenStore.store = { ...tokenStore.store, dailyMetrics: { date: dateKey(), value } }; return value; }
 
 function createWindow() {
+  // FIX #6: Minimalist black theme with frameless, transparent window
   window = new BrowserWindow({
-    width: 760,
-    height: 560,
-    minWidth: 620,
-    minHeight: 480,
+    width: 900,
+    height: 680,
+    minWidth: 720,
+    minHeight: 500,
     show: false,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     alwaysOnTop: true,
     focusable: false,
     resizable: true,
     skipTaskbar: true,
-    webPreferences: { preload: path.join(__dirname, '../preload/preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
+    webPreferences: { 
+      preload: path.join(__dirname, '../preload/preload.js'), 
+      contextIsolation: true, 
+      nodeIntegration: false, 
+      sandbox: true 
+    }
   });
   window.setAlwaysOnTop(true, 'floating');
   window.setSkipTaskbar(true);
@@ -126,7 +156,43 @@ async function waitForOllama(timeoutMs: number) {
     if (status.ollama) return status;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Error('Ollama did not start within the setup window. Please relaunch Voice Code to retry.');
+  throw new Error('Ollama did not start within the setup window. Please relaunch maicer to retry.');
+}
+
+async function registerQwenModel() {
+  const modelfilePath = path.join(ASSET_ROOT, 'qwen', 'Modelfile');
+  const modelfileContent = `FROM ${qwenModelPath().replaceAll('\\', '/')}
+PARAMETER temperature 0.7
+PARAMETER top_k 40
+PARAMETER top_p 0.9
+PARAMETER num_ctx 4096
+PARAMETER num_batch 512`;
+  await fs.writeFile(modelfilePath, modelfileContent, 'utf8');
+
+  const { spawn: spawnProcess } = await import('child_process');
+  await new Promise<void>((resolve, reject) => {
+    const child = spawnProcess('ollama', ['create', QWEN_MODEL_NAME, '-f', modelfilePath], { windowsHide: true, shell: false });
+    let stderr = '';
+    const timeout = setTimeout(() => { child.kill(); reject(new Error('Ollama model registration timed out')); }, NETWORK_TIMEOUT_MS);
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.once('error', () => reject(new Error('Ollama CLI is unavailable')));
+    child.once('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `Ollama create exited with ${code ?? 'unknown status'}`));
+    });
+  }).catch(async (cliError) => {
+    const response = await fetch(`${OLLAMA_URL}/api/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: QWEN_MODEL_NAME, modelfile: modelfileContent, stream: false }),
+      signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS)
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(`Ollama registration failed: ${errorData.error ?? (cliError instanceof Error ? cliError.message : 'unknown error')}`);
+    }
+  });
 }
 
 function sendSetupProgress(phase: string, percent: number, detail: string) {
@@ -194,13 +260,26 @@ async function downloadFile(url: string, destination: string, expectedSha256: st
 }
 
 async function bootstrapRuntime() {
+  // FIX #3: Workspace preparation loop with proper timeout and attempt tracking
+  const now = Date.now();
+  if (setupAttempts >= MAX_SETUP_ATTEMPTS) {
+    if (now - setupLastAttemptTime < SETUP_ATTEMPT_TIMEOUT_MS) {
+      throw new Error(`Setup has reached maximum attempts (${MAX_SETUP_ATTEMPTS}). Please restart maicer.`);
+    }
+    setupAttempts = 0;
+  }
+  
+  setupAttempts++;
+  setupLastAttemptTime = now;
+
   const assets = await assetConfig();
   let status = await runtimeStatus();
   if (!status.ollama) {
     sendSetupProgress('ollama', 12, 'Ollama is not running. Downloading the official installer...');
-    const installer = path.join(app.getPath('temp'), 'VoiceCode-OllamaSetup.exe');
+    const installer = path.join(app.getPath('temp'), 'maicer-OllamaSetup.exe');
     await downloadFile(assets.ollamaInstallerUrl ?? OLLAMA_INSTALLER_URL, installer, assets.ollamaInstallerSha256, 'Downloading Ollama installer');
     if (process.platform === 'win32') {
+      const { spawn } = await import('child_process');
       const installerProcess = spawn(installer, ['/S'], { windowsHide: true, shell: false, detached: true });
       installerProcess.unref();
       sendSetupProgress('installing', 25, 'Installing Ollama in the background...');
@@ -227,9 +306,7 @@ async function bootstrapRuntime() {
   status = await runtimeStatus();
   if (!status.model) {
     sendSetupProgress('model', 85, 'Registering Qwen 0.5B with Ollama...');
-    const modelfile = `FROM ${qwenModelPath().replaceAll('\\', '/')}`;
-    const response = await fetch(`${OLLAMA_URL}/api/create`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: QWEN_MODEL_NAME, modelfile, stream: false }) });
-    if (!response.ok) throw new Error('Ollama could not register the downloaded Qwen model');
+    await registerQwenModel();
   }
   status = await runtimeStatus();
   sendSetupProgress(status.ready ? 'done' : 'waiting', status.ready ? 100 : 90, status.ready ? 'Local AI workspace ready.' : 'One local runtime component still needs attention.');
@@ -326,8 +403,8 @@ ipcMain.handle('waitlist:join', async (_event, email: string) => {
   const safeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : '';
   if (!safeEmail) throw new Error('Enter a valid email address.');
 
-  const supabaseUrl = process.env.VITE_SUPABASE_URL;
-  const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) throw new Error('Waitlist signup is not configured yet.');
 
   const url = `${validateHttpsUrl(supabaseUrl, 'Supabase URL').replace(/\/$/, '')}/rest/v1/waitlist`;
@@ -364,10 +441,11 @@ ipcMain.handle('pipeline:check-limit', checkLimit);
 ipcMain.handle('pipeline:record-completion', (_event, output: string, seconds: number) => recordCompletion(output, seconds));
 ipcMain.handle('metrics:today', () => dailyMetrics());
 ipcMain.handle('pipeline:transcribe', async (_event, audio: ArrayBuffer) => {
+  const { spawn: spawnProcess } = await import('child_process');
   const executable = whisperPath();
   if (!executable) return { transcript: '', status: 'missing-whisper' };
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, [], { windowsHide: true, shell: false });
+    const child = spawnProcess(executable, [], { windowsHide: true, shell: false });
     const output: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => output.push(chunk));
     child.on('error', reject);
@@ -415,18 +493,19 @@ ipcMain.handle('pipeline:generate', async (event, input: { transcript: string; c
   if (input.requestId !== undefined) generationControllers.delete(input.requestId);
   return true;
 });
-  ipcMain.handle('pipeline:cancel', (_event, requestId: number) => { generationControllers.get(requestId)?.abort(); generationControllers.delete(requestId); return true; });
+ipcMain.handle('pipeline:cancel', (_event, requestId: number) => { generationControllers.get(requestId)?.abort(); generationControllers.delete(requestId); return true; });
 
-app.whenReady().then(() => {
+app.on('ready', async () => {
+  await initializeStore();
   configureAutoUpdater();
-  if (!globalShortcut.register(APP_SHORTCUT, toggleOverlay)) console.error(`Voice Code could not register ${APP_SHORTCUT_LABEL}`);
+  if (!globalShortcut.register(APP_SHORTCUT, toggleOverlay)) console.error(`maicer could not register ${APP_SHORTCUT_LABEL}`);
   createWindow();
   tray = new Tray(nativeImage.createEmpty());
-  tray.setToolTip('Voice Code');
+  tray.setToolTip('maicer');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show Voice Code', click: () => { window?.showInactive(); } },
+    { label: 'Show maicer', click: () => { window?.showInactive(); } },
     { type: 'separator' },
-    { label: 'Quit Voice Code', click: () => { isQuitting = true; app.quit(); } }
+    { label: 'Quit maicer', click: () => { isQuitting = true; app.quit(); } }
   ]));
   tray.on('click', toggleOverlay);
   void checkOllama().then((health) => window?.webContents.send('system:health', health));

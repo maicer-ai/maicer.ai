@@ -22,16 +22,19 @@ let activeGenerationId = 0;
 let segmentTimer: number | undefined;
 let liveTranscripts: string[] = [];
 let workStartedAt = 0;
+let setupRetryCount = 0;
+let setupTimer: number | undefined;
+const MAX_SETUP_RETRIES = 5;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div id="setup-screen" class="setup-screen hidden"><div class="setup-card"><div class="setup-logo"><i data-lucide="sparkles"></i></div><span class="eyebrow">FIRST-RUN SETUP</span><h1>Preparing your<br><em>voice workspace.</em></h1><p id="setup-detail">Getting things ready for your first command...</p><div class="setup-progress"><span id="setup-progress-bar"></span></div><div class="setup-progress-meta"><span id="setup-phase">Getting ready</span><span id="setup-percent">0%</span></div><div class="setup-points"><span><i data-lucide="lock-keyhole"></i> Private by default</span><span><i data-lucide="zap"></i> Ready when complete</span></div></div></div>
   <main class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark"><i data-lucide="zap"></i></span><div><strong>VOICE CODE</strong><small>LOCAL WORKSPACE</small></div></div>
+      <div class="brand"><span class="brand-mark"><i data-lucide="zap"></i></span><div><strong>MAICER</strong><small>LOCAL AI ASSISTANT</small></div></div>
       <div class="workspace-switcher"><span class="workspace-avatar">VC</span><span><b>Personal workspace</b><small>Free plan</small></span><i data-lucide="arrow-up-right"></i></div>
       <nav class="nav"><span class="nav-label">Workspace</span><button class="nav-item active" data-view="dashboard"><i data-lucide="layout-dashboard"></i> Home</button><button class="nav-item" data-view="history"><i data-lucide="history"></i> History <span class="nav-count">12</span></button><span class="nav-label">Library</span><button class="nav-item" data-view="commands"><i data-lucide="terminal"></i> Commands</button><button class="nav-item" data-view="dictionary"><i data-lucide="book-open"></i> Dictionary</button><span class="nav-label">Connect</span><button class="nav-item" data-view="integrations"><i data-lucide="plug"></i> Integrations</button><button class="nav-item" data-view="settings"><i data-lucide="settings"></i> Settings</button></nav>
-      <div class="sidebar-bottom"><div class="upgrade-mini"><div class="upgrade-top"><i data-lucide="sparkles"></i><span>Voice Code Pro</span></div><p>Unlimited completions and priority models.</p><button id="sidebar-upgrade">Upgrade <i data-lucide="arrow-up-right"></i></button></div><div class="user-row"><span class="user-avatar">SR</span><span><b>Sarah R.</b><small>sarah@voicecode.dev</small></span><button class="icon-button"><i data-lucide="settings"></i></button></div></div>
+      <div class="sidebar-bottom"><div class="upgrade-mini"><div class="upgrade-top"><i data-lucide="sparkles"></i><span>maicer Pro</span></div><p>Unlimited completions and priority models.</p><button id="sidebar-upgrade">Upgrade <i data-lucide="arrow-up-right"></i></button></div><div class="user-row"><span class="user-avatar">SR</span><span><b>Sarah R.</b><small>sarah@maicer.dev</small></span><button class="icon-button"><i data-lucide="settings"></i></button></div></div>
     </aside>
     <section class="content-shell">
       <header class="topbar"><div><span class="breadcrumb">Personal workspace / <b>Home</b></span><h2>Good morning, Sarah <span class="wave-hand">✦</span></h2></div><div class="top-actions"><span class="privacy"><i data-lucide="lock-keyhole"></i> Local-first</span><button class="icon-button" aria-label="Help" data-view="help"><i data-lucide="circle-help"></i></button><button id="close" class="icon-button" aria-label="Hide to tray"><i data-lucide="x"></i></button></div></header>
@@ -46,8 +49,8 @@ app.innerHTML = `
       </div>
       <section id="view-panel" class="view-panel hidden"></section>
       <section id="paywall" class="paywall hidden"><div class="paywall-icon"><i data-lucide="sparkles"></i></div><div><span class="eyebrow">MONTHLY LIMIT REACHED</span><h2>You have used your 2,000 free completions.</h2><p>Add a Pro or Corporate license, or continue next month.</p></div><button id="paywall-upgrade" class="primary">Upgrade <strong>$25/mo</strong></button></section>
-      <section id="upgrade-modal" class="upgrade-modal hidden" role="dialog" aria-modal="true" aria-labelledby="upgrade-title"><div class="upgrade-dialog"><button id="upgrade-close" class="icon-button" aria-label="Close"><i data-lucide="x"></i></button><span class="eyebrow">VOICE CODE PREMIUM</span><h2 id="upgrade-title">Keep your flow going.</h2><p id="upgrade-copy">Join the Premium waitlist and we will let you know when early access opens.</p><form id="waitlist-form"><label class="sr-only" for="waitlist-email">Email address</label><input id="waitlist-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required /><div class="upgrade-dialog-actions"><button id="upgrade-save" class="primary" type="submit">Join waitlist</button><button id="upgrade-checkout" class="secondary" type="button">View plans</button></div></form><small id="upgrade-error" role="status" aria-live="polite"></small></div></section>
-      <footer><span><i data-lucide="lock-keyhole"></i> End-to-end local processing</span><span class="build">Voice Code v0.1.0</span></footer>
+      <section id="upgrade-modal" class="upgrade-modal hidden" role="dialog" aria-modal="true" aria-labelledby="upgrade-title"><div class="upgrade-dialog"><button id="upgrade-close" class="icon-button" aria-label="Close"><i data-lucide="x"></i></button><span class="eyebrow">MAICER PREMIUM</span><h2 id="upgrade-title">Keep your flow going.</h2><p id="upgrade-copy">Join the Premium waitlist and we will let you know when early access opens.</p><form id="waitlist-form"><label class="sr-only" for="waitlist-email">Email address</label><input id="waitlist-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required /><div class="upgrade-dialog-actions"><button id="upgrade-save" class="primary" type="submit">Join waitlist</button><button id="upgrade-checkout" class="secondary" type="button">View plans</button></div></form><small id="upgrade-error" role="status" aria-live="polite"></small></div></section>
+      <footer><span><i data-lucide="lock-keyhole"></i> End-to-end local processing</span><span class="build">maicer v0.1.0</span></footer>
     </section>
   </main>`;
 
@@ -62,6 +65,12 @@ const viewPanel = $('#view-panel');
 const setupScreen = $('#setup-screen');
 const transcriptPreview = $('#transcript-preview');
 const contextBadge = $('#context-badge');
+const setupRetry = document.createElement('button');
+setupRetry.className = 'secondary setup-retry hidden';
+setupRetry.textContent = 'Retry setup';
+setupRetry.type = 'button';
+setupRetry.addEventListener('click', () => { setupRetryCount = 0; void prepareWorkspace(); });
+setupScreen.querySelector('.setup-card')?.append(setupRetry);
 
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character] ?? character));
@@ -76,18 +85,18 @@ async function showView(view: string) {
   if (view === 'dashboard') { dashboard.classList.remove('hidden'); viewPanel.classList.add('hidden'); return; }
   dashboard.classList.add('hidden'); viewPanel.classList.remove('hidden');
   if (view === 'history') {
-    const sessions = await window.voiceCode.listSessions();
+    const sessions = await window.maicer.listSessions();
     viewPanel.innerHTML = `<div class="view-heading"><div><span class="eyebrow"><i data-lucide="history"></i> WORKSPACE</span><h1>Session history</h1><p>Your locally stored voice-to-code sessions.</p></div><span class="view-meta">${sessions.length} saved</span></div><div class="full-session-list">${sessions.length ? sessions.map((session) => `<article class="full-session"><div><b>${escapeHtml(session.title)}</b><small>${relativeTime(session.createdAt)} · ${session.output.split('\n').length} lines</small></div><button class="secondary session-open" data-session-id="${session.id}"><i data-lucide="code-2"></i> View output</button></article>`).join('') : '<div class="empty-state"><i data-lucide="history"></i><h3>No sessions yet</h3><p>Your completed generations will appear here.</p></div>'}</div>`;
   } else if (view === 'analytics') {
-    const limit = await window.voiceCode.checkLimit();
+    const limit = await window.maicer.checkLimit();
     viewPanel.innerHTML = `<div class="view-heading"><div><span class="eyebrow"><i data-lucide="bar-chart-3"></i> WORKSPACE</span><h1>Usage</h1><p>Keep an eye on your monthly completion budget.</p></div></div><div class="analytics-grid"><div class="analytics-stat"><small>COMPLETIONS USED</small><strong>${limit.used.toLocaleString()}</strong><span>of ${limit.limit.toLocaleString()} available</span></div><div class="analytics-stat"><small>REMAINING</small><strong>${Math.max(0, limit.limit - limit.used).toLocaleString()}</strong><span>resets at the start of next month</span></div><div class="analytics-stat"><small>PLAN</small><strong>${limit.tier === 'pro' ? 'Pro' : 'Free'}</strong><span>${limit.tier === 'pro' ? 'Unlimited usage' : 'Upgrade for unlimited'}</span></div></div><div class="usage-large"><div class="progress"><span style="width:${Math.min(100, Math.round((limit.used / limit.limit) * 100))}%"></span></div><p>${Math.round((limit.used / limit.limit) * 100)}% of the free allowance used</p></div>`;
   } else if (view === 'settings') {
-    const hasLicense = await window.voiceCode.hasLicense();
-    viewPanel.innerHTML = `<div class="view-heading"><div><span class="eyebrow"><i data-lucide="settings"></i> CONFIGURE</span><h1>Settings</h1><p>Connect your local tools and Voice Code account.</p></div></div><div class="settings-list"><label class="setting-row"><span><b>License token</b><small>Encrypted securely on this device.</small></span><input id="license-input" type="password" placeholder="${hasLicense ? 'Token saved securely' : 'Paste license token'}" /><button id="save-license" class="primary">Save</button></label><details class="diagnostics"><summary>Advanced diagnostics</summary><div class="diagnostic-grid"><span>Workspace services</span><b id="diagnostic-services">Checking...</b><span>Voice capture</span><b id="diagnostic-voice">Available</b></div></details></div>`;
-    $('#save-license').addEventListener('click', async () => { const token = ($('#license-input') as HTMLInputElement).value.trim(); if (token) { await window.voiceCode.setLicense(token); $('#save-license').textContent = 'Saved'; } });
-    void window.voiceCode.health().then((health) => { $('#diagnostic-services').textContent = health.running ? 'Ready' : 'Needs attention'; });
+    const hasLicense = await window.maicer.hasLicense();
+    viewPanel.innerHTML = `<div class="view-heading"><div><span class="eyebrow"><i data-lucide="settings"></i> CONFIGURE</span><h1>Settings</h1><p>Connect your local tools and maicer account.</p></div></div><div class="settings-list"><label class="setting-row"><span><b>License token</b><small>Encrypted securely on this device.</small></span><input id="license-input" type="password" placeholder="${hasLicense ? 'Token saved securely' : 'Paste license token'}" /><button id="save-license" class="primary">Save</button></label><details class="diagnostics"><summary>Advanced diagnostics</summary><div class="diagnostic-grid"><span>Workspace services</span><b id="diagnostic-services">Checking...</b><span>Voice capture</span><b id="diagnostic-voice">Available</b></div></details></div>`;
+    $('#save-license').addEventListener('click', async () => { const token = ($('#license-input') as HTMLInputElement).value.trim(); if (token) { await window.maicer.setLicense(token); $('#save-license').textContent = 'Saved'; } });
+    void window.maicer.health().then((health) => { $('#diagnostic-services').textContent = health.running ? 'Ready' : 'Needs attention'; });
   } else {
-    viewPanel.innerHTML = `<div class="view-heading"><div><span class="eyebrow"><i data-lucide="circle-help"></i> SUPPORT</span><h1>Help center</h1><p>Everything you need to get your local workspace running.</p></div></div><div class="help-list"><details open><summary>How do I start a completion?</summary><p>Press ${APP_SHORTCUT_LABEL} from any app, allow microphone access, then speak naturally. The selected editor context is included automatically.</p></details><details><summary>What if setup is still in progress?</summary><p>Voice Code keeps preparing in the background. You can leave this window open and try again when the workspace is ready.</p></details><details><summary>Where does my audio go?</summary><p>Your audio and generated code stay on this device.</p></details></div>`;
+    viewPanel.innerHTML = `<div class="view-heading"><div><span class="eyebrow"><i data-lucide="circle-help"></i> SUPPORT</span><h1>Help center</h1><p>Everything you need to get your local workspace running.</p></div></div><div class="help-list"><details open><summary>How do I start a completion?</summary><p>Press ${APP_SHORTCUT_LABEL} from any app, allow microphone access, then speak naturally. The selected editor context is included automatically.</p></details><details><summary>What if setup is still in progress?</summary><p>maicer keeps preparing in the background. You can leave this window open and try again when the workspace is ready.</p></details><details><summary>Where does my audio go?</summary><p>Your audio and generated code stay on this device.</p></details></div>`;
   }
   createIcons({ icons: { Activity, ArrowUpRight, BarChart3, BookOpen, Check, Clipboard, Code2, Copy, Cpu, CircleHelp, History, LayoutDashboard, LockKeyhole, Mic, Plug, RefreshCw, Settings, ShieldCheck, Sparkles, Terminal, Wifi, X, Zap } });
 }
@@ -146,7 +155,15 @@ function stopVoiceCapture() {
 }
 
 function transcribeBlob(blob: Blob) {
-  return window.voiceCode.transcribe(blob.arrayBuffer());
+  return window.maicer.transcribe(blob.arrayBuffer());
+}
+
+function microphoneError(error: unknown) {
+  const name = error instanceof DOMException ? error.name : '';
+  if (name === 'NotAllowedError' || name === 'SecurityError') return 'Microphone access was denied. Allow maicer in Windows microphone privacy settings, then retry.';
+  if (name === 'NotFoundError' || name === 'NotReadableError') return 'No usable microphone was found. Remote Desktop and headless sessions may not expose audio devices.';
+  if (name === 'OverconstrainedError') return 'The available microphone does not support the requested settings.';
+  return 'Microphone capture is unavailable. Connect a microphone or leave Remote Desktop, then retry.';
 }
 
 function startVoiceActivityDetection(stream: MediaStream) {
@@ -188,10 +205,12 @@ function playTone(frequency: number, duration: number) {
 
 function updateSetup(progress: { phase: string; percent: number; detail: string }) {
   setupScreen.classList.remove('hidden');
-  $('#setup-detail').textContent = progress.phase === 'done' ? 'Your workspace is ready.' : 'Getting everything ready for your first command...';
-  $('#setup-phase').textContent = progress.phase === 'done' ? 'Ready to use' : 'Preparing';
+  const failed = progress.phase === 'error';
+  $('#setup-detail').textContent = progress.detail || (progress.phase === 'done' ? 'Your workspace is ready.' : 'Getting everything ready for your first command...');
+  $('#setup-phase').textContent = progress.phase === 'done' ? 'Ready to use' : failed ? 'Setup paused' : 'Preparing';
   $('#setup-percent').textContent = `${progress.percent}%`;
   $('#setup-progress-bar').style.width = `${progress.percent}%`;
+  setupRetry.classList.toggle('hidden', !failed);
   if (progress.phase === 'done') window.setTimeout(() => setupScreen.classList.add('hidden'), 700);
 }
 
@@ -205,6 +224,7 @@ async function toggleRecording() {
   if (!setupReady) { setState('idle', 'Your workspace is still getting ready.'); return; }
   if (state === 'recording') { stopVoiceCapture(); return; }
   if (state !== 'idle') return;
+  if (!navigator.mediaDevices?.getUserMedia) { setState('idle', 'This environment does not provide microphone access. Try a local Windows session.'); return; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     mediaStream = stream;
@@ -212,7 +232,8 @@ async function toggleRecording() {
     const startSegment = () => {
       if (state !== 'recording') return;
       chunks = [];
-      recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       recorder.ondataavailable = (event) => chunks.push(event.data);
       recorder.onstop = async () => {
         const segment = new Blob(chunks, { type: 'audio/webm' });
@@ -239,7 +260,14 @@ async function toggleRecording() {
     setState('recording');
     startVoiceActivityDetection(stream);
     playTone(520, 0.08);
-  } catch { setState('idle', 'Allow microphone access in your browser settings, then try again.'); }
+  } catch (error) {
+    mediaStream?.getTracks().forEach((track) => track.stop());
+    mediaStream = undefined;
+    recorder = undefined;
+    stopLivePreview();
+    cancelAnimationFrame(vadAnimation);
+    setState('idle', microphoneError(error));
+  }
 }
 
 async function processAudio(finalSegment?: Blob) {
@@ -248,10 +276,10 @@ async function processAudio(finalSegment?: Blob) {
     transcript = [...liveTranscripts, transcribed.transcript].filter(Boolean).join(' ');
     showTranscript(transcript);
     if (!transcript) { setState('idle', 'I didn\'t catch that. Try speaking a little closer to your microphone.'); return; }
-    const limit = await window.voiceCode.checkLimit();
+    const limit = await window.maicer.checkLimit();
     if (!limit.allowed) { setState('paywall'); $('#paywall').classList.remove('hidden'); $('#upgrade-modal').classList.remove('hidden'); return; }
     $('#paywall').classList.add('hidden');
-    const context = await window.voiceCode.readSelection();
+    const context = await window.maicer.readSelection();
     pendingContext = context.text;
     contextBadge.classList.toggle('hidden', !pendingContext);
     generated = '';
@@ -260,8 +288,8 @@ async function processAudio(finalSegment?: Blob) {
     setState('streaming', 'Creating your code...');
     workStartedAt = Date.now();
     activeGenerationId = ++generationId;
-    await window.voiceCode.generate({ transcript, context: context.text, outsideIde: !context.text, requestId: activeGenerationId });
-      await window.voiceCode.saveSession({ title: transcript.length > 58 ? `${transcript.slice(0, 58)}...` : transcript, transcript, output: generated, context: context.text });
+    await window.maicer.generate({ transcript, context: context.text, outsideIde: !context.text, requestId: activeGenerationId });
+      await window.maicer.saveSession({ title: transcript.length > 58 ? `${transcript.slice(0, 58)}...` : transcript, transcript, output: generated, context: context.text });
   } catch (error) {
     const detail = error instanceof Error ? error.message : '';
     if (detail.includes('Monthly completion limit')) { $('#upgrade-modal').classList.remove('hidden'); setState('paywall'); return; }
@@ -269,18 +297,18 @@ async function processAudio(finalSegment?: Blob) {
   }
 }
 
-window.voiceCode.onChunk((event) => {
+window.maicer.onChunk((event) => {
   if (event.requestId !== activeGenerationId) return;
   generated += event.chunk;
   output.textContent = generated;
   output.scrollTop = output.scrollHeight;
 });
-window.voiceCode.onComplete(async (event) => {
+window.maicer.onComplete(async (event) => {
   if (event.requestId !== activeGenerationId) return;
-  const insertion = await window.voiceCode.typeOutput(generated);
+  const insertion = await window.maicer.typeOutput(generated);
   const inserted = insertion.inserted;
-  if (!inserted) await window.voiceCode.copy(generated);
-  const completion = await window.voiceCode.recordCompletion(generated, Math.max(0, (Date.now() - workStartedAt) / 1000));
+  if (!inserted) await window.maicer.copy(generated);
+  const completion = await window.maicer.recordCompletion(generated, Math.max(0, (Date.now() - workStartedAt) / 1000));
   updateQuota(completion.used, completion.limit);
   renderMetrics(completion.metrics);
   const message = inserted ? 'Inserted into your active app' : 'Your code is ready to copy';
@@ -294,13 +322,13 @@ window.voiceCode.onComplete(async (event) => {
   createIcons({ icons: { Check, Code2 } });
   window.setTimeout(() => { toast.classList.add('fade'); window.setTimeout(() => { toast.remove(); if (inserted) { result.classList.add('hidden'); void window.voiceCode.hideOverlay(); } }, 300); }, inserted ? 1500 : 3000);
 });
-window.voiceCode.onHotkey(() => void toggleRecording());
+window.maicer.onHotkey(() => void toggleRecording());
 
 $('#record').addEventListener('click', () => void toggleRecording());
-$('#close').addEventListener('click', () => void window.voiceCode.hideOverlay());
-$('#dismiss').addEventListener('click', () => { const previous = activeGenerationId; activeGenerationId = ++generationId; void window.voiceCode.cancelGeneration(previous); result.classList.add('hidden'); });
-$('#copy').addEventListener('click', () => void window.voiceCode.copy(generated));
-$('#regenerate').addEventListener('click', () => { if (transcript) { result.classList.remove('hidden'); generated = ''; output.textContent = ''; activeGenerationId = ++generationId; setState('streaming', 'Regenerating locally...'); void window.voiceCode.generate({ transcript, context: pendingContext, outsideIde: !pendingContext, requestId: activeGenerationId }); } });
+$('#close').addEventListener('click', () => void window.maicer.hideOverlay());
+$('#dismiss').addEventListener('click', () => { const previous = activeGenerationId; activeGenerationId = ++generationId; void window.maicer.cancelGeneration(previous); result.classList.add('hidden'); });
+$('#copy').addEventListener('click', () => void window.maicer.copy(generated));
+$('#regenerate').addEventListener('click', () => { if (transcript) { result.classList.remove('hidden'); generated = ''; output.textContent = ''; activeGenerationId = ++generationId; setState('streaming', 'Regenerating locally...'); void window.maicer.generate({ transcript, context: pendingContext, outsideIde: !pendingContext, requestId: activeGenerationId }); } });
 window.addEventListener('beforeunload', () => {
   stopLivePreview();
   cancelAnimationFrame(vadAnimation);
@@ -319,8 +347,12 @@ function openUpgradeModal() {
 
 $('#upgrade').addEventListener('click', openUpgradeModal);
 $('#paywall-upgrade').addEventListener('click', openUpgradeModal);
-$('#upgrade-close').addEventListener('click', () => $('#upgrade-modal').classList.add('hidden'));
-$('#upgrade-checkout').addEventListener('click', () => void window.voiceCode.openCheckout());
+const closeUpgradeModal = () => $('#upgrade-modal').classList.add('hidden');
+$('#upgrade-close').addEventListener('click', (event) => { event.stopPropagation(); closeUpgradeModal(); });
+$('#upgrade-modal').addEventListener('click', (event) => { if (event.target === $('#upgrade-modal')) closeUpgradeModal(); });
+$('.upgrade-dialog').addEventListener('click', (event) => event.stopPropagation());
+window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !$('#upgrade-modal').classList.contains('hidden')) closeUpgradeModal(); });
+$('#upgrade-checkout').addEventListener('click', () => void window.maicer.openCheckout());
 $('#waitlist-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const emailInput = $('#waitlist-email') as HTMLInputElement;
@@ -332,9 +364,9 @@ $('#waitlist-form').addEventListener('submit', async (event) => {
   submit.textContent = 'Joining...';
   error.textContent = '';
   try {
-    await window.voiceCode.joinWaitlist(email);
+    await window.maicer.joinWaitlist(email);
     $('#upgrade-title').textContent = 'You are on the list.';
-    $('#upgrade-copy').textContent = 'Thanks. We will email you when Voice Code Premium is ready.';
+    $('#upgrade-copy').textContent = 'Thanks. We will email you when maicer Premium is ready.';
     $('#waitlist-form').classList.add('hidden');
     error.textContent = '';
   } catch (reason) { error.textContent = reason instanceof Error ? reason.message : 'Could not join the waitlist. Please try again.'; }
@@ -349,25 +381,35 @@ document.querySelectorAll<HTMLElement>('[data-view]').forEach((item) => item.add
     if (view) void showView(view);
 }));
 
-void window.voiceCode.health().then((health) => {
+void window.maicer.health().then((health) => {
   statusText.textContent = health.running ? 'Ollama connected' : 'Ollama needs attention';
   $('#status-dot').classList.toggle('online', health.running);
   $('#runtime-status').textContent = health.running ? 'Connected' : 'Needs attention';
 });
-void window.voiceCode.checkLimit().then((limit) => updateQuota(limit.used, limit.limit));
-void window.voiceCode.todayMetrics().then(renderMetrics);
-window.voiceCode.onSetupProgress(updateSetup);
+void window.maicer.checkLimit().then((limit) => updateQuota(limit.used, limit.limit));
+void window.maicer.todayMetrics().then(renderMetrics);
+window.maicer.onSetupProgress(updateSetup);
 async function prepareWorkspace() {
+  if (setupTimer) window.clearTimeout(setupTimer);
+  if (setupRetryCount >= MAX_SETUP_RETRIES) {
+    updateSetup({ phase: 'error', percent: 0, detail: 'Setup could not finish. Check Ollama and retry.' });
+    return;
+  }
+  setupRetryCount++;
   try {
-    const status = await window.voiceCode.setupStatus();
-    if (status.ready) { setupReady = true; return; }
-    const finalStatus = await window.voiceCode.bootstrapRuntime();
+    const status = await window.maicer.setupStatus();
+    if (status.ready) { setupReady = true; updateSetup({ phase: 'done', percent: 100, detail: 'Your workspace is ready.' }); return; }
+    const finalStatus = await window.maicer.bootstrapRuntime();
     setupReady = finalStatus.ready;
     if (finalStatus.ready) updateSetup({ phase: 'done', percent: 100, detail: 'Your workspace is ready.' });
-    else window.setTimeout(() => void prepareWorkspace(), 5000);
-  } catch {
-    updateSetup({ phase: 'waiting', percent: 90, detail: 'Getting everything ready for your first command...' });
-    window.setTimeout(() => void prepareWorkspace(), 5000);
+    else if (setupRetryCount < MAX_SETUP_RETRIES) setupTimer = window.setTimeout(() => void prepareWorkspace(), 5000);
+    else updateSetup({ phase: 'error', percent: 0, detail: 'Setup could not finish. Check Ollama and retry.' });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Setup could not finish.';
+    if (setupRetryCount < MAX_SETUP_RETRIES) {
+      updateSetup({ phase: 'waiting', percent: 90, detail: `${detail} Retrying...` });
+      setupTimer = window.setTimeout(() => void prepareWorkspace(), 5000);
+    } else updateSetup({ phase: 'error', percent: 0, detail });
   }
 }
 void prepareWorkspace();

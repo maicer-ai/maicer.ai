@@ -1,7 +1,7 @@
 export {};
 declare global {
   interface Window {
-    voiceCode: {
+    maicer: {
       health(): Promise<{ running: boolean; model?: string }>;
       setupStatus(): Promise<{ ollama: boolean; model: boolean; whisper: boolean; qwenAsset: boolean; ready: boolean }>;
       bootstrapRuntime(): Promise<{ ollama: boolean; model: boolean; whisper: boolean; qwenAsset: boolean; ready: boolean }>;
