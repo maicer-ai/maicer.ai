@@ -1,6 +1,6 @@
 {
   "name": "voice-code-mvp",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Local voice-to-code desktop assistant for Windows",
   "main": "dist/main/main/main.js",
   "author": "Voice Code",
